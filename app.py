@@ -8,6 +8,14 @@ import time
 # --- 1. AYARLAR VE GÜVENLİK ---
 st.set_page_config(page_title="Linux Master", page_icon="🐧", layout="centered")
 
+# CSS ile Yazı Boyutlarını ve Boşlukları İyileştirme
+st.markdown("""
+    <style>
+    .stRadio label { font-size: 18px !important; }
+    div[data-testid="stVerticalBlock"] > div { margin-bottom: 20px; }
+    </style>
+    """, unsafe_allow_html=True)
+
 # API Anahtarı
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -22,7 +30,7 @@ except Exception as e:
 # --- 2. FONKSİYONLAR ---
 
 def get_gemini_quiz(selected_commands):
-    """Gemini API'den soru üretir. Kullanıcının model listesindeki güncel modelleri dener."""
+    """Gemini API'den soru üretir. Güncel modelleri kullanır."""
     commands_text = ", ".join(selected_commands)
 
     prompt = f"""
@@ -54,17 +62,15 @@ def get_gemini_quiz(selected_commands):
     ]
     """
     
-    # Sizin listenizde bulunan GÜNCEL modeller
     models_to_try = [
-        'gemini-2.0-flash',       # En yeni ve hızlı
-        'gemini-2.0-flash-exp',   # Alternatif
-        'gemini-2.0-flash-lite',  # Hafif sürüm
-        'gemini-flash-latest'     # En son kararlı sürüm
+        'gemini-2.0-flash', 
+        'gemini-2.0-flash-exp', 
+        'gemini-1.5-flash',
+        'gemini-pro'
     ]
     
     for model_name in models_to_try:
         try:
-            # Model ismini tam yol olmadan dener, olmazsa başına 'models/' ekler
             try:
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content(prompt)
@@ -74,29 +80,23 @@ def get_gemini_quiz(selected_commands):
 
             cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
             quiz_data = json.loads(cleaned_text)
-            return quiz_data # Başarılı olursa döner
+            return quiz_data
         except Exception as e:
-            print(f"Model {model_name} hata verdi: {e}")
             continue
             
     st.error("Üzgünüz, yapay zeka şu an cevap veremiyor. Lütfen biraz bekleyip tekrar deneyin.")
     return []
 
-# --- 3. ARAYÜZ (UI) ---
+# --- 3. ARAYÜZ VE STATE YÖNETİMİ ---
 
 st.title("🐧 Linux Sınavı")
 
-# Session State Başlangıç
-if 'quiz_data' not in st.session_state:
-    st.session_state['quiz_data'] = None
-if 'submitted' not in st.session_state:
-    st.session_state['submitted'] = False
-if 'user_answers' not in st.session_state:
-    st.session_state['user_answers'] = {}
-if 'available_indices' not in st.session_state:
-    st.session_state['available_indices'] = []
-if 'all_commands' not in st.session_state:
-    st.session_state['all_commands'] = []
+# State Tanımları
+if 'quiz_data' not in st.session_state: st.session_state['quiz_data'] = None
+if 'submitted' not in st.session_state: st.session_state['submitted'] = False
+if 'user_answers' not in st.session_state: st.session_state['user_answers'] = {}
+if 'available_indices' not in st.session_state: st.session_state['available_indices'] = []
+if 'all_commands' not in st.session_state: st.session_state['all_commands'] = []
 
 uploaded_file = st.file_uploader("Excel Dosyası (.xlsx)", type=["xlsx"])
 
@@ -125,68 +125,104 @@ if uploaded_file:
         st.progress(progress)
 
         if remaining_cmds == 0:
-            st.warning("🎉 Tebrikler! Liste bitti.")
+            st.success("🎉 Tebrikler! Tüm sorular bitti.")
             if st.button("🔄 Başa Dön"):
                 st.session_state['available_indices'] = list(range(total_cmds))
                 st.rerun()
         else:
-            st.subheader("⚙️ Sınav Ayarları")
-            max_limit_input = 15
-            slider_max = min(remaining_cmds, max_limit_input)
-            
-            num_questions = st.slider("Soru Sayısı:", 1, slider_max, min(5, slider_max))
+            if st.session_state['quiz_data'] is None:
+                st.subheader("⚙️ Sınav Ayarları")
+                max_limit_input = 15
+                slider_max = min(remaining_cmds, max_limit_input)
+                num_questions = st.slider("Soru Sayısı:", 1, slider_max, min(5, slider_max))
 
-            if st.button(f"🚀 {num_questions} Soru Getir"):
-                with st.spinner("Gemini 2.0 soruları hazırlıyor..."):
-                    selected_indices = random.sample(st.session_state['available_indices'], num_questions)
-                    
-                    selected_commands = [st.session_state['all_commands'][i] for i in selected_indices]
-                    
-                    quiz_data = get_gemini_quiz(selected_commands)
-                    
-                    if quiz_data:
-                        for idx in selected_indices:
-                            st.session_state['available_indices'].remove(idx)
-                            
-                        st.session_state['quiz_data'] = quiz_data
-                        st.session_state['user_answers'] = {}
-                        st.session_state['submitted'] = False
-                        st.rerun()
-                    else:
-                        st.error("Soru üretilemedi.")
+                if st.button(f"🚀 {num_questions} Soru Getir"):
+                    with st.spinner("Sorular hazırlanıyor..."):
+                        selected_indices = random.sample(st.session_state['available_indices'], num_questions)
+                        selected_commands = [st.session_state['all_commands'][i] for i in selected_indices]
+                        
+                        quiz_data = get_gemini_quiz(selected_commands)
+                        
+                        if quiz_data:
+                            for idx in selected_indices:
+                                st.session_state['available_indices'].remove(idx)
+                            st.session_state['quiz_data'] = quiz_data
+                            st.session_state['user_answers'] = {}
+                            st.session_state['submitted'] = False
+                            st.rerun()
+                        else:
+                            st.error("Soru üretilemedi.")
 
     except Exception as e:
         st.error(f"Dosya hatası: {e}")
 
-# --- 4. SINAV GÖSTERİMİ ---
+# --- 4. GÖRSEL OLARAK İYİLEŞTİRİLMİŞ SINAV ALANI ---
 
 if st.session_state.get('quiz_data'):
     st.divider()
     st.subheader("📝 Sorular")
-    form = st.form(key='quiz_form')
     
-    for i, q in enumerate(st.session_state['quiz_data']):
-        st.markdown(f"#### {i+1}. {q['question']}")
-        if q['type'] == 'multiple_choice':
-            st.session_state['user_answers'][i] = form.radio("Seçenekler:", q['options'], key=f"q_{i}", label_visibility="collapsed")
-        elif q['type'] == 'fill_in_the_blank':
-            st.session_state['user_answers'][i] = form.text_input("Cevabınız:", key=f"q_{i}")
-        st.write("")
-    
-    if form.form_submit_button("✅ Kontrol Et"):
+    # Form başlangıcı
+    with st.form(key='quiz_form'):
+        
+        for i, q in enumerate(st.session_state['quiz_data']):
+            # HER SORU İÇİN AYRI BİR KUTU (Container)
+            with st.container(border=True):
+                # Soruyu mavi kutuda göster
+                st.info(f"**Soru {i+1}:** {q['question']}")
+                
+                # Cevap Alanı
+                if q['type'] == 'multiple_choice':
+                    st.session_state['user_answers'][i] = st.radio(
+                        "Cevabınız:",  # Label
+                        q['options'], 
+                        key=f"q_{i}", 
+                        index=None  # Hiçbiri seçili gelmesin
+                    )
+                elif q['type'] == 'fill_in_the_blank':
+                    st.session_state['user_answers'][i] = st.text_input(
+                        "Cevabınızı buraya yazın:", 
+                        key=f"q_{i}"
+                    )
+        
+        # Gönder Butonu (Formun dışında değil, en altında)
+        st.markdown("<br>", unsafe_allow_html=True)
+        submit_button = st.form_submit_button("✅ Cevapları Kontrol Et", use_container_width=True)
+
+    # --- SONUÇ KONTROLÜ ---
+    if submit_button:
         st.session_state['submitted'] = True
         score = 0
         total = len(st.session_state['quiz_data'])
-        st.divider()
+        
         st.markdown("### 📊 Sonuçlar")
+        
         for i, q in enumerate(st.session_state['quiz_data']):
             user_ans = str(st.session_state['user_answers'].get(i, "")).strip()
             correct_ans = str(q['answer']).strip()
-            if user_ans.lower() == correct_ans.lower():
-                score += 1
-                st.success(f"**Soru {i+1}:** Doğru! 👏")
-            else:
-                st.error(f"**Soru {i+1}:** Yanlış. Doğru cevap: **{correct_ans}**")
-        st.metric("Puan", f"{score} / {total}")
+            
+            with st.container(border=True):
+                st.markdown(f"**Soru {i+1}:** {q['question']}")
+                
+                if user_ans.lower() == correct_ans.lower():
+                    score += 1
+                    st.success(f"✅ Doğru! (Cevabın: {user_ans})")
+                else:
+                    st.error(f"❌ Yanlış.")
+                    st.write(f"Senin cevabın: **{user_ans if user_ans else '(Boş)'}**")
+                    st.warning(f"Doğru cevap: **{correct_ans}**")
+        
+        # Puanı büyük göster
+        st.divider()
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            st.metric("TOPLAM PUAN", f"{score} / {total}", delta=f"%{(score/total)*100:.0f} Başarı")
+            
         if score == total:
              st.balloons()
+        
+        # Yeni tur butonu
+        if st.button("Sonraki Tura Geç ➡️"):
+            st.session_state['quiz_data'] = None
+            st.session_state['submitted'] = False
+            st.rerun()
