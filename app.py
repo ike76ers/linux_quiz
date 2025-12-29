@@ -9,7 +9,6 @@ import time
 # --- 1. AYARLAR VE GÜVENLİK ---
 st.set_page_config(page_title="Linux Master", page_icon="🐧", layout="centered")
 
-# CSS: Görünüm İyileştirmeleri
 st.markdown("""
     <style>
     .stRadio label { font-size: 18px !important; }
@@ -31,11 +30,7 @@ except Exception as e:
 # --- 2. FONKSİYONLAR ---
 
 def get_gemini_quiz(selected_commands):
-    """
-    Gemini API'den soru üretir.
-    - Güvenlik filtreleri gevşetildi (Linux komutları için).
-    - JSON formatı zorlandı.
-    """
+    """Gemini API'den soru üretir. Sadece kullanıcının hesabındaki modelleri dener."""
     commands_text = ", ".join(selected_commands)
 
     prompt = f"""
@@ -67,15 +62,14 @@ def get_gemini_quiz(selected_commands):
     ]
     """
     
-    # Sizin hesabınızda aktif olan modeller (Öncelik sırasına göre)
+    # SENİN HESABINDA KESİN OLAN MODELLER (Listeden Alındı)
+    # Hata veren 1.5 modelleri çıkarıldı.
     models_to_try = [
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-exp',
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-latest'
+        'models/gemini-2.0-flash',       # En güçlüsü
+        'models/gemini-2.0-flash-exp',   # Alternatif
+        'models/gemini-2.0-flash-001'    # Yedek
     ]
 
-    # Güvenlik Ayarları: Linux komutlarının engellenmemesi için 'BLOCK_NONE' yapıyoruz.
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -83,53 +77,50 @@ def get_gemini_quiz(selected_commands):
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 
-    # JSON Modu Konfigürasyonu
     generation_config = {
         "response_mime_type": "application/json",
         "temperature": 0.7
     }
     
-    last_error = ""
+    error_log = []
 
     for model_name in models_to_try:
         try:
-            # Model ismini tamir et (Başına models/ ekleyerek veya eklemeyerek dene)
-            full_model_name = model_name if "models/" in model_name else f"models/{model_name}"
-            
             model = genai.GenerativeModel(
-                model_name=full_model_name,
+                model_name=model_name,
                 safety_settings=safety_settings,
                 generation_config=generation_config
             )
             
             response = model.generate_content(prompt)
             
-            # Yanıtı temizle ve JSON'a çevir
             text_response = response.text.strip()
-            # Bazen başında ```json yazar, onları temizleyelim
+            # Temizlik
             if text_response.startswith("```"):
                 text_response = text_response.split("```")[1]
                 if text_response.startswith("json"):
                     text_response = text_response[4:]
             
             quiz_data = json.loads(text_response)
-            return quiz_data
+            return quiz_data # Başarılıysa dön
 
         except Exception as e:
-            last_error = str(e)
-            # Hata detayını terminale yaz (debug için)
-            print(f"Model {model_name} başarısız oldu: {e}")
+            error_msg = f"Model {model_name} başarısız: {str(e)}"
+            print(error_msg)
+            error_log.append(error_msg)
             continue
             
-    st.error(f"⚠️ Soru üretilemedi. Hata Detayı: {last_error}")
-    st.info("İpucu: Eğer '429' hatası görüyorsanız kotanız dolmuştur. 'FinishReason.SAFETY' görüyorsanız komutlar zararlı algılanmıştır.")
+    # Eğer buraya geldiyse hiçbiri çalışmamıştır
+    st.error("⚠️ Soru üretilemedi. Denenen modellerin hataları:")
+    for err in error_log:
+        st.warning(err)
     return []
 
-# --- 3. ARAYÜZ VE STATE YÖNETİMİ ---
+# --- 3. ARAYÜZ ---
 
 st.title("🐧 Linux Sınavı")
 
-# State Tanımları
+# State
 if 'quiz_data' not in st.session_state: st.session_state['quiz_data'] = None
 if 'submitted' not in st.session_state: st.session_state['submitted'] = False
 if 'user_answers' not in st.session_state: st.session_state['user_answers'] = {}
@@ -175,7 +166,7 @@ if uploaded_file:
                 num_questions = st.slider("Soru Sayısı:", 1, slider_max, min(5, slider_max))
 
                 if st.button(f"🚀 {num_questions} Soru Getir"):
-                    with st.spinner("Sorular hazırlanıyor... (Linux komutları işleniyor)"):
+                    with st.spinner("Sorular hazırlanıyor..."):
                         selected_indices = random.sample(st.session_state['available_indices'], num_questions)
                         selected_commands = [st.session_state['all_commands'][i] for i in selected_indices]
                         
@@ -188,12 +179,12 @@ if uploaded_file:
                             st.session_state['user_answers'] = {}
                             st.session_state['submitted'] = False
                             st.rerun()
-                        # Hata mesajı artık fonksiyonun içinden geliyor
+                        # Hata mesajı fonksiyonun içinden basılıyor
 
     except Exception as e:
         st.error(f"Dosya hatası: {e}")
 
-# --- 4. GÖRSEL OLARAK İYİLEŞTİRİLMİŞ SINAV ALANI ---
+# --- 4. GÖRSEL ALAN ---
 
 if st.session_state.get('quiz_data'):
     st.divider()
