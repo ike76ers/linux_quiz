@@ -30,7 +30,10 @@ except Exception as e:
 # --- 2. FONKSİYONLAR ---
 
 def get_gemini_quiz(selected_commands):
-    """Gemini API'den soru üretir. Sadece kullanıcının hesabındaki modelleri dener."""
+    """
+    Gemini API'den soru üretir.
+    Hız sınırına (429) takılırsa otomatik bekler ve tekrar dener.
+    """
     commands_text = ", ".join(selected_commands)
 
     prompt = f"""
@@ -62,12 +65,12 @@ def get_gemini_quiz(selected_commands):
     ]
     """
     
-    # SENİN HESABINDA KESİN OLAN MODELLER (Listeden Alındı)
-    # Hata veren 1.5 modelleri çıkarıldı.
+    # KOTA DOSTU MODEL LİSTESİ (Lite modeller başta)
     models_to_try = [
-        'models/gemini-2.0-flash',       # En güçlüsü
-        'models/gemini-2.0-flash-exp',   # Alternatif
-        'models/gemini-2.0-flash-001'    # Yedek
+        'models/gemini-2.0-flash-lite',         # Hızlı ve hafif
+        'models/gemini-2.0-flash-lite-preview', 
+        'models/gemini-2.0-flash',              # Standart hızlı
+        'models/gemini-2.0-flash-exp'
     ]
 
     safety_settings = {
@@ -85,35 +88,46 @@ def get_gemini_quiz(selected_commands):
     error_log = []
 
     for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                safety_settings=safety_settings,
-                generation_config=generation_config
-            )
-            
-            response = model.generate_content(prompt)
-            
-            text_response = response.text.strip()
-            # Temizlik
-            if text_response.startswith("```"):
-                text_response = text_response.split("```")[1]
-                if text_response.startswith("json"):
-                    text_response = text_response[4:]
-            
-            quiz_data = json.loads(text_response)
-            return quiz_data # Başarılıysa dön
+        # Her model için 3 kez deneme hakkı verelim (Retry Logic)
+        for attempt in range(3): 
+            try:
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    safety_settings=safety_settings,
+                    generation_config=generation_config
+                )
+                
+                response = model.generate_content(prompt)
+                
+                text_response = response.text.strip()
+                if text_response.startswith("```"):
+                    text_response = text_response.split("```")[1]
+                    if text_response.startswith("json"):
+                        text_response = text_response[4:]
+                
+                quiz_data = json.loads(text_response)
+                return quiz_data # Başarılıysa çık
 
-        except Exception as e:
-            error_msg = f"Model {model_name} başarısız: {str(e)}"
-            print(error_msg)
-            error_log.append(error_msg)
-            continue
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Eğer hata "429" (Hız Limiti) ise bekle
+                if "429" in error_msg or "quota" in error_msg.lower():
+                    wait_time = 10  # 10 saniye bekle
+                    st.toast(f"⏳ Hız limitine takıldık. {wait_time} saniye bekleniyor... (Model: {model_name})")
+                    time.sleep(wait_time)
+                    continue # Aynı modeli tekrar dene
+                
+                # Başka bir hataysa kaydet ve sonraki modele geç
+                print(f"Model {model_name} başarısız: {error_msg}")
+                error_log.append(f"{model_name}: {error_msg}")
+                break # Bu model bozuk, diğer modele geç
             
-    # Eğer buraya geldiyse hiçbiri çalışmamıştır
-    st.error("⚠️ Soru üretilemedi. Denenen modellerin hataları:")
-    for err in error_log:
-        st.warning(err)
+    # Hiçbiri çalışmazsa
+    st.error("⚠️ Soru üretilemedi. (Tüm modeller ve denemeler başarısız oldu)")
+    with st.expander("Hata Detaylarını Gör"):
+        for err in error_log:
+            st.write(err)
     return []
 
 # --- 3. ARAYÜZ ---
@@ -166,7 +180,7 @@ if uploaded_file:
                 num_questions = st.slider("Soru Sayısı:", 1, slider_max, min(5, slider_max))
 
                 if st.button(f"🚀 {num_questions} Soru Getir"):
-                    with st.spinner("Sorular hazırlanıyor..."):
+                    with st.spinner("Sorular hazırlanıyor... (Hız limiti kontrol ediliyor)"):
                         selected_indices = random.sample(st.session_state['available_indices'], num_questions)
                         selected_commands = [st.session_state['all_commands'][i] for i in selected_indices]
                         
@@ -179,7 +193,6 @@ if uploaded_file:
                             st.session_state['user_answers'] = {}
                             st.session_state['submitted'] = False
                             st.rerun()
-                        # Hata mesajı fonksiyonun içinden basılıyor
 
     except Exception as e:
         st.error(f"Dosya hatası: {e}")
